@@ -1,8 +1,11 @@
-import React, { useRef, useState } from 'react';
-import { Camera, Upload, Scan, CheckCircle2, ChevronRight, HelpCircle, Mic, Sparkles, Image as ImageIcon } from 'lucide-react';
+import React, { useRef, useState, useEffect } from 'react';
+import { Camera, Upload, Scan, CheckCircle2, HelpCircle, Mic } from 'lucide-react';
 import { CropSample, SupportedLanguage } from '../types/farm';
 import { TRANSLATIONS } from '../data/translations';
 import { VoiceTranscriberModal } from './VoiceTranscriberModal';
+import { WeatherWidget } from './WeatherWidget';
+import { RealtimeWeather, REGION_PRESETS, RegionPreset, fetchLiveWeather } from '../services/weatherService';
+import { reverseGeocodeCoords } from '../services/gpsService';
 
 interface ScannerHeroProps {
   currentLang: SupportedLanguage;
@@ -78,6 +81,77 @@ export const ScannerHero: React.FC<ScannerHeroProps> = ({
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState<boolean>(false);
   const [voiceTarget, setVoiceTarget] = useState<'cropHint' | 'notes'>('notes');
 
+  // Local Agricultural Weather Widget state (OpenWeatherMap API)
+  const [weather, setWeather] = useState<RealtimeWeather | null>(null);
+  const [isLoadingWeather, setIsLoadingWeather] = useState<boolean>(false);
+  const [currentRegion, setCurrentRegion] = useState<RegionPreset>(REGION_PRESETS[0]);
+  const [customLocationLabel, setCustomLocationLabel] = useState<string | null>(null);
+  const [customCityQuery, setCustomCityQuery] = useState<string | undefined>(undefined);
+
+  const loadScannerWeather = async (
+    lat: number,
+    lon: number,
+    label: string,
+    cityQuery?: string
+  ) => {
+    setIsLoadingWeather(true);
+    try {
+      const live = await fetchLiveWeather(lat, lon, label, currentLang, cityQuery);
+      setWeather(live);
+      if (cityQuery && live.locationName) {
+        setCustomLocationLabel(live.locationName);
+      }
+    } catch (_err) {
+      // Handled inside service
+    } finally {
+      setIsLoadingWeather(false);
+    }
+  };
+
+  useEffect(() => {
+    const label = customLocationLabel || currentRegion.name[currentLang] || currentRegion.name.en;
+    loadScannerWeather(currentRegion.lat, currentRegion.lon, label, customCityQuery);
+  }, [currentRegion, currentLang]);
+
+  const handleSelectRegion = (region: RegionPreset) => {
+    setCustomLocationLabel(null);
+    setCustomCityQuery(undefined);
+    setCurrentRegion(region);
+  };
+
+  const handleSearchCity = (cityQuery: string) => {
+    setCustomCityQuery(cityQuery);
+    setCustomLocationLabel(cityQuery);
+    loadScannerWeather(currentRegion.lat, currentRegion.lon, cityQuery, cityQuery);
+  };
+
+  const handleDetectGps = () => {
+    if (!navigator.geolocation) return;
+    setIsLoadingWeather(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        setCustomCityQuery(undefined);
+        const addr = await reverseGeocodeCoords(lat, lon);
+        const label = addr.displayName || `${lat.toFixed(2)}°N, ${lon.toFixed(2)}°E`;
+        setCustomLocationLabel(label);
+        await loadScannerWeather(lat, lon, label);
+      },
+      () => {
+        setIsLoadingWeather(false);
+      },
+      { timeout: 10000, enableHighAccuracy: true }
+    );
+  };
+
+  const handleRefreshWeather = () => {
+    const lat = weather?.lat ?? currentRegion.lat;
+    const lon = weather?.lon ?? currentRegion.lon;
+    const label = customLocationLabel || currentRegion.name[currentLang] || currentRegion.name.en;
+    loadScannerWeather(lat, lon, label, customCityQuery);
+  };
+
   const handleProcessFile = async (file: File) => {
     try {
       const optimizedBase64 = await resizeImageFile(file);
@@ -132,6 +206,20 @@ export const ScannerHero: React.FC<ScannerHeroProps> = ({
           </p>
         </div>
       </div>
+
+      {/* Live OpenWeatherMap Agricultural Weather Widget */}
+      <WeatherWidget
+        currentLang={currentLang}
+        highContrast={highContrast}
+        weather={weather}
+        isLoading={isLoadingWeather}
+        currentRegion={currentRegion}
+        customLocationLabel={customLocationLabel}
+        onSelectRegion={handleSelectRegion}
+        onSearchCity={handleSearchCity}
+        onDetectGps={handleDetectGps}
+        onRefresh={handleRefreshWeather}
+      />
 
       {/* Main Scanner Section */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-8 items-start">

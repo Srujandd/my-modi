@@ -70,28 +70,42 @@ app.get('/api/ai-status', (_req, res) => {
 
 // REST API: GET /api/weather (OpenWeatherMap with fallback to Open-Meteo)
 app.get('/api/weather', async (req, res) => {
-  const lat = req.query.lat || '17.3850';
-  const lon = req.query.lon || '78.4867';
-  const owmKey = process.env.OPENWEATHERMAP_API_KEY || process.env.OPENWEATHER_API_KEY;
+  // Reload .env in case keys were updated dynamically
+  dotenv.config();
+  const lat = (req.query.lat as string) || '17.3850';
+  const lon = (req.query.lon as string) || '78.4867';
+  const cityQuery = (req.query.q as string) || '';
+  const owmKey = (process.env.OPENWEATHERMAP_API_KEY || process.env.OPENWEATHER_API_KEY || '').trim();
 
   if (owmKey) {
     try {
-      const owmUrl = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=${owmKey}`;
+      const owmUrl = cityQuery
+        ? `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(cityQuery)}&units=metric&appid=${owmKey}`
+        : `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&appid=${owmKey}`;
       const response = await fetch(owmUrl);
       if (response.ok) {
         const d = await response.json();
+        const rain1h = d.rain?.['1h'] ?? (d.rain?.['3h'] ? Math.round((d.rain['3h'] / 3) * 10) / 10 : 0);
+        const drizzle1h = d.drizzle?.['1h'] ?? 0;
+        const rainfallMm = Math.round((rain1h + drizzle1h) * 10) / 10;
+
         return res.json({
           success: true,
           source: 'OpenWeatherMap',
           data: {
             temperature: d.main?.temp ?? 28,
             humidity: d.main?.humidity ?? 70,
+            rainfallMm,
+            cloudCover: d.clouds?.all ?? 0,
+            pressure: d.main?.pressure ?? 1012,
             apparentTemperature: d.main?.feels_like ?? d.main?.temp ?? 28,
             windSpeed: (d.wind?.speed ?? 2) * 3.6, // m/s to km/h
             weatherMain: d.weather?.[0]?.main || 'Clear',
             description: d.weather?.[0]?.description || 'Clear sky',
             weatherId: d.weather?.[0]?.id || 800,
-            cityName: d.name || 'Local Farm'
+            cityName: d.name || cityQuery || 'Local Farm',
+            lat: d.coord?.lat ?? parseFloat(lat),
+            lon: d.coord?.lon ?? parseFloat(lon)
           }
         });
       }
@@ -102,23 +116,29 @@ app.get('/api/weather', async (req, res) => {
 
   // Live direct fallback to open-meteo
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,rain,wind_speed_10m,weather_code&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,rain,cloud_cover,surface_pressure,wind_speed_10m,weather_code&timezone=auto`;
     const response = await fetch(url);
     if (response.ok) {
       const d = await response.json();
       const cur = d.current || {};
+      const rainfallMm = Math.round(((cur.rain ?? cur.precipitation ?? 0)) * 10) / 10;
       return res.json({
         success: true,
         source: 'Open-Meteo',
         data: {
           temperature: cur.temperature_2m ?? 28,
           humidity: cur.relative_humidity_2m ?? 70,
+          rainfallMm,
+          cloudCover: cur.cloud_cover ?? 20,
+          pressure: Math.round(cur.surface_pressure ?? 1012),
           apparentTemperature: cur.apparent_temperature ?? 28,
           windSpeed: cur.wind_speed_10m ?? 6,
-          weatherMain: (cur.precipitation ?? 0) > 0 ? 'Rain' : (cur.weather_code ?? 0) >= 3 ? 'Clouds' : 'Clear',
-          description: (cur.weather_code ?? 0) >= 3 ? 'Partly cloudy' : 'Clear sky',
+          weatherMain: rainfallMm > 0 ? 'Rain' : (cur.weather_code ?? 0) >= 3 ? 'Clouds' : 'Clear',
+          description: rainfallMm > 0 ? 'Light rain' : (cur.weather_code ?? 0) >= 3 ? 'Partly cloudy' : 'Clear sky',
           weatherId: cur.weather_code ?? 800,
-          cityName: 'Local Field'
+          cityName: cityQuery || 'Local Field',
+          lat: parseFloat(lat),
+          lon: parseFloat(lon)
         }
       });
     }
@@ -132,12 +152,17 @@ app.get('/api/weather', async (req, res) => {
     data: {
       temperature: 28,
       humidity: 70,
+      rainfallMm: 0,
+      cloudCover: 15,
+      pressure: 1012,
       apparentTemperature: 29,
       windSpeed: 6.5,
       weatherMain: 'Clear',
       description: 'Clear sky',
       weatherId: 800,
-      cityName: 'Field Location'
+      cityName: cityQuery || 'Field Location',
+      lat: parseFloat(lat),
+      lon: parseFloat(lon)
     }
   });
 });

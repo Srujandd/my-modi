@@ -3,6 +3,10 @@ import { SupportedLanguage } from '../types/farm';
 export interface RealtimeWeather {
   temperature: number;
   humidity: number;
+  rainfallMm: number; // precipitation in mm
+  cloudCover: number; // percentage
+  pressure: number; // hPa
+  dewPoint: number; // °C
   windSpeed: number;
   soilMoisture: number; // percentage
   apparentTemperature: number;
@@ -13,6 +17,8 @@ export interface RealtimeWeather {
   locationName: string;
   lastUpdated: string;
   source: 'OpenWeatherMap' | 'Open-Meteo' | 'Fallback';
+  lat?: number;
+  lon?: number;
 }
 
 export interface RegionPreset {
@@ -97,12 +103,17 @@ export const REGION_PRESETS: RegionPreset[] = [
   }
 ];
 
+function computeDewPoint(tempC: number, rh: number): number {
+  return Math.round((tempC - (100 - rh) / 5) * 10) / 10;
+}
+
 // OpenWeatherMap API call with seamless fallback
 export async function fetchLiveWeather(
   lat: number,
   lon: number,
   locationLabel: string,
-  lang: SupportedLanguage
+  lang: SupportedLanguage,
+  cityQuery?: string
 ): Promise<RealtimeWeather> {
   const conditionTexts: Record<SupportedLanguage, Record<string, string>> = {
     en: {
@@ -154,9 +165,12 @@ export async function fetchLiveWeather(
 
   const dict = conditionTexts[lang] || conditionTexts.en;
 
-  // 1. Try server-side or OpenWeatherMap API proxy
+  // 1. Try server-side OpenWeatherMap API proxy
   try {
-    const owmRes = await fetch(`/api/weather?lat=${lat}&lon=${lon}`);
+    const queryUrl = cityQuery
+      ? `/api/weather?q=${encodeURIComponent(cityQuery)}&lat=${lat}&lon=${lon}`
+      : `/api/weather?lat=${lat}&lon=${lon}`;
+    const owmRes = await fetch(queryUrl);
     if (owmRes.ok) {
       const owmData = await owmRes.json();
       if (owmData && owmData.success && owmData.data) {
@@ -164,7 +178,14 @@ export async function fetchLiveWeather(
         const temp = Math.round(d.temperature);
         const humidity = Math.round(d.humidity);
         const wind = Math.round(d.windSpeed * 10) / 10;
-        const isRain = d.weatherMain?.toLowerCase().includes('rain') || d.weatherMain?.toLowerCase().includes('drizzle');
+        const rainfallMm = typeof d.rainfallMm === 'number' ? d.rainfallMm : 0;
+        const cloudCover = typeof d.cloudCover === 'number' ? d.cloudCover : 0;
+        const pressure = typeof d.pressure === 'number' ? d.pressure : 1012;
+        const isRain =
+          rainfallMm > 0 ||
+          d.weatherMain?.toLowerCase().includes('rain') ||
+          d.weatherMain?.toLowerCase().includes('drizzle') ||
+          d.weatherMain?.toLowerCase().includes('thunderstorm');
 
         let sprayCondition: RealtimeWeather['sprayCondition'] = 'optimal';
         if (isRain) {
@@ -176,12 +197,17 @@ export async function fetchLiveWeather(
         }
 
         const condKey = isRain ? 'rain' : d.weatherMain?.toLowerCase().includes('cloud') ? 'cloudy' : 'clear';
+        const effectiveRainMm = rainfallMm > 0 ? rainfallMm : isRain ? 1.2 : 0;
 
         return {
           temperature: temp,
           humidity,
+          rainfallMm: effectiveRainMm,
+          cloudCover,
+          pressure,
+          dewPoint: computeDewPoint(temp, humidity),
           windSpeed: wind,
-          soilMoisture: Math.round(humidity * 0.52),
+          soilMoisture: Math.min(95, Math.round(humidity * 0.52 + (effectiveRainMm > 0 ? 18 : 0))),
           apparentTemperature: Math.round(d.apparentTemperature ?? temp),
           weatherCode: d.weatherId || 800,
           conditionText: dict[condKey] || d.description || dict.clear,
@@ -189,7 +215,9 @@ export async function fetchLiveWeather(
           sprayConditionText: dict[sprayCondition] || dict.optimal,
           locationName: d.cityName || locationLabel,
           lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          source: 'OpenWeatherMap'
+          source: owmData.source === 'OpenWeatherMap' ? 'OpenWeatherMap' : owmData.source === 'Open-Meteo' ? 'Open-Meteo' : 'Fallback',
+          lat: d.lat ?? lat,
+          lon: d.lon ?? lon
         };
       }
     }
@@ -199,7 +227,7 @@ export async function fetchLiveWeather(
 
   // 2. High-precision meteorological satellite feed (Open-Meteo)
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,rain,wind_speed_10m,weather_code&hourly=soil_moisture_0_to_1cm&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,rain,cloud_cover,surface_pressure,wind_speed_10m,weather_code&hourly=soil_moisture_0_to_1cm&timezone=auto`;
     const res = await fetch(url);
     if (!res.ok) throw new Error('Weather API error');
     const data = await res.json();
@@ -208,7 +236,9 @@ export async function fetchLiveWeather(
     const temp = Math.round(current.temperature_2m ?? 28);
     const humidity = Math.round(current.relative_humidity_2m ?? 70);
     const wind = Math.round((current.wind_speed_10m ?? 6) * 10) / 10;
-    const rain = (current.precipitation ?? 0) + (current.rain ?? 0);
+    const rain = Math.round(((current.rain ?? current.precipitation ?? 0)) * 10) / 10;
+    const cloudCover = Math.round(current.cloud_cover ?? 20);
+    const pressure = Math.round(current.surface_pressure ?? 1012);
     const weatherCode = current.weather_code ?? 0;
 
     let soilMoisture = 35;
@@ -235,6 +265,10 @@ export async function fetchLiveWeather(
     return {
       temperature: temp,
       humidity,
+      rainfallMm: rain,
+      cloudCover,
+      pressure,
+      dewPoint: computeDewPoint(temp, humidity),
       windSpeed: wind,
       soilMoisture,
       apparentTemperature: Math.round(current.apparent_temperature ?? temp),
@@ -244,13 +278,19 @@ export async function fetchLiveWeather(
       sprayConditionText: dict[sprayCondition] || dict.optimal,
       locationName: locationLabel,
       lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      source: 'Open-Meteo'
+      source: 'Open-Meteo',
+      lat,
+      lon
     };
   } catch (_e) {
     // 3. Graceful fallback for offline fields
     return {
       temperature: 28,
       humidity: 68,
+      rainfallMm: 0,
+      cloudCover: 18,
+      pressure: 1012,
+      dewPoint: computeDewPoint(28, 68),
       windSpeed: 6.5,
       soilMoisture: 38,
       apparentTemperature: 29,
@@ -260,7 +300,10 @@ export async function fetchLiveWeather(
       sprayConditionText: dict.optimal,
       locationName: locationLabel,
       lastUpdated: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      source: 'Fallback'
+      source: 'Fallback',
+      lat,
+      lon
     };
   }
 }
+

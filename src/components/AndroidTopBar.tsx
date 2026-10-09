@@ -268,25 +268,31 @@ export const AndroidTopBar: React.FC<AndroidTopBarProps> = ({
             </div>
 
             {/* Temperature */}
-            <span className="flex items-center gap-1 text-amber-400 font-extrabold" title="Current Temperature (Influences pathogen incubation rate)">
+            <span className="flex items-center gap-1 text-amber-400 font-extrabold tabular-nums" title="Current Temperature (Influences pathogen incubation rate)">
               <Sun className="w-3.5 h-3.5 text-amber-400" />
               {weather ? `${weather.temperature}°C` : '28°C'}
             </span>
 
             {/* Relative Humidity */}
-            <span className="flex items-center gap-1 font-semibold text-white" title="Current Relative Humidity (Crucial for fungal spore germination)">
-              <CloudRain className="w-3.5 h-3.5 text-[#a0f399]" />
+            <span className="flex items-center gap-1 font-semibold text-white tabular-nums" title="Current Relative Humidity (Crucial for fungal spore germination)">
+              <Droplets className="w-3.5 h-3.5 text-[#a0f399]" />
               <span className="text-[#a0f399] font-black">{weather ? `${weather.humidity}%` : '70%'}</span> {t.humidity}
             </span>
 
+            {/* Rainfall */}
+            <span className="flex items-center gap-1 font-semibold text-sky-300 tabular-nums" title="Hourly Rainfall / Precipitation (OpenWeatherMap)">
+              <CloudRain className="w-3.5 h-3.5 text-sky-300" />
+              <span className="font-black">{weather ? `${weather.rainfallMm.toFixed(1)} mm` : '0.0 mm'}</span>
+            </span>
+
             {/* Soil Moisture */}
-            <span className="hidden md:flex items-center gap-1 font-semibold text-teal-300">
+            <span className="hidden md:flex items-center gap-1 font-semibold text-teal-300 tabular-nums">
               <Droplets className="w-3 h-3" />
               {weather ? `${weather.soilMoisture}%` : '35%'} {t.soilMoisture}
             </span>
 
             {/* Wind Speed */}
-            <span className="hidden sm:flex items-center gap-1 font-semibold text-[#baeed9]">
+            <span className="hidden sm:flex items-center gap-1 font-semibold text-[#baeed9] tabular-nums">
               <Wind className="w-3 h-3 text-teal-300" />
               {weather ? `${weather.windSpeed} km/h` : '6 km/h'}
             </span>
